@@ -3,7 +3,7 @@
 How to put the Desk Flight Radar firmware on a **Waveshare ESP32-C6-Touch-LCD-2.8**.
 The same file works on every board.
 
-- Firmware file: `release/FlightRadar-v1.0.10.bin` (a complete image: bootloader, partition table
+- Firmware file: `release/FlightRadar-v1.0.11.bin` (a complete image: bootloader, partition table
   and app)
 - Flash address: **`0x0`**
 - Time per board: about 2 minutes
@@ -27,7 +27,7 @@ one of those. Firefox and Safari don't support Web Serial, so they won't work.
      click Connect again.
 4. **Set up the Program section:**
    - Flash Address: **`0x0`** (not 0x1000 or 0x10000)
-   - Choose File: `FlightRadar-v1.0.10.bin`. If extra file rows are listed, delete them.
+   - Choose File: `FlightRadar-v1.0.11.bin`. If extra file rows are listed, delete them.
    - Flash Mode, Flash Frequency, Flash Size: leave all three on **keep**. The file already
      contains the right values (16 MB flash); changing them can stop the board from booting.
    - **Erase all**: tick it the **first time** you flash a new board (clears Waveshare's demo
@@ -43,7 +43,7 @@ one of those. Firefox and Safari don't support Web Serial, so they won't work.
 
 ```sh
 pip install esptool
-esptool --chip esp32c6 write-flash 0x0 release/FlightRadar-v1.0.10.bin
+esptool --chip esp32c6 write-flash 0x0 release/FlightRadar-v1.0.11.bin
 # first flash of a new board: erase first
 esptool --chip esp32c6 erase-flash
 ```
@@ -62,9 +62,9 @@ See [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md): `pio run -t upload`.
 
 ```sh
 # Mac / Linux
-shasum -a 256 release/FlightRadar-v1.0.10.bin
+shasum -a 256 release/FlightRadar-v1.0.11.bin
 # Windows (PowerShell)
-Get-FileHash release\FlightRadar-v1.0.10.bin -Algorithm SHA256
+Get-FileHash release\FlightRadar-v1.0.11.bin -Algorithm SHA256
 ```
 
 The result should match the value in `SHA256SUMS.txt`.
@@ -78,4 +78,4 @@ The result should match the value in `SHA256SUMS.txt`.
 | Flashing stops partway | Lower the baud rate to 115200 and try again. |
 | Black screen after flashing | The file was written at the wrong address. Erase, then flash again at `0x0`. |
 | Board stuck in download mode | Press RESET (without holding BOOT). |
-| Screen colors look wrong | You're running firmware older than v1.0.1. Flash v1.0.10. |
+| Screen colors look wrong | You're running firmware older than v1.0.1. Flash v1.0.11. |

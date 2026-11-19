@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.11 (2026-11-19): photos follow planespotters' rules
+- Fixed: planespotters refused the board's photo requests (HTTP 403), so planes showed "Photo
+  failed" even when adsb.fi had a photo. The board now follows planespotters' photo API terms:
+  - identifies itself with a link to this project;
+  - asks planespotters only when you tap a plane (no lookups in advance);
+  - loads the photo unchanged from planespotters' image server (no resizing service);
+  - doesn't keep the photo once the popup closes, and keeps planespotters' answers 60 min.
+- If planespotters refuses a request, it's left alone for 10 minutes.
+- If planespotters has no photo, or sends one the board can't draw (progressive JPEG), the
+  airport-data.com photo is shown instead.
+- Nearby planes' text (type, owner, route) is still looked up in advance; the photo now takes
+  a second or two after a tap.
+
 ## 1.0.10 (2026-11-19): photo reliability
 - Fixed: one failed photo lookup (timeout, busy server, low memory) was remembered for an hour,
   so tapping that plane kept showing "No photo". Only a definite "nothing on file" is remembered

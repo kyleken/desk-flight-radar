@@ -64,7 +64,8 @@ The weather is replaced for a few seconds by the plane's photo, tail number, air
 airline or owner, route and current altitude and speed. A bar at the bottom counts down. Tap
 the strip to close it early.
 
-- Nearby planes usually show instantly, because the radar looks them up ahead of time.
+- The text for nearby planes usually shows instantly, because the radar looks it up ahead of
+  time. The photo is fetched when you tap, so it takes a second or two.
 - If the photo says **"Same type"**, it's a stock photo of the same model, not that exact
   aircraft.
 - Small private planes often have no photo or route on file. That's normal.

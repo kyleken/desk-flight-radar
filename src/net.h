@@ -14,6 +14,7 @@ void requestGeocode(const char* zip);               // ZIP -> lat/lon
 void refreshWeather();                              // location or units changed
 void refreshAdsb();                                 // range or source changed
 void requestDetails(const Aircraft& ac);            // aircraft tapped
+void releasePhoto();                                // details popup closed
 void setFetchRadiusNm(float nm);                    // what the radar needs
 
 // Local time helpers (valid once NTP + time zone are known)

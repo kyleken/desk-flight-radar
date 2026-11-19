@@ -33,7 +33,7 @@ About screen.
 | [adsbdb.com](https://www.adsbdb.com) | Aircraft type, owner, route | Free public API |
 | [planespotters.net](https://www.planespotters.net) | Aircraft photos | Photographer credit shown on screen |
 | [airport-data.com](https://www.airport-data.com) | Fallback aircraft photos | Credited on screen |
-| [wsrv.nl](https://wsrv.nl) | Resizes photos for the device | Free image cache and resize service |
+| [wsrv.nl](https://wsrv.nl) | Resizes airport-data.com photos for the device (planespotters photos are loaded unchanged) | Free image cache and resize service |
 | [zippopotam.us](https://zippopotam.us) | US ZIP code to coordinates | Free public API |
 
 Inspired by [MatixYo/ESp32-Plane-Radar](https://github.com/MatixYo/ESp32-Plane-Radar).

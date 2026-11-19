@@ -38,6 +38,7 @@ void requestGeocode(const char*) {}
 void refreshWeather() {}
 void refreshAdsb() {}
 void setFetchRadiusNm(float) {}
+void releasePhoto() {}
 void requestDetails(const Aircraft& ac) {
   g_details = Details{};
   g_details.hex = ac.hex;

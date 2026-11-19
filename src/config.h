@@ -2,7 +2,7 @@
 #pragma once
 #include <Arduino.h>
 
-#define FW_VERSION "1.0.10"
+#define FW_VERSION "1.0.11"
 
 namespace cfg {
 
@@ -71,6 +71,9 @@ constexpr int PHOTO_W = 88;
 constexpr int PHOTO_H = 59;
 
 constexpr const char* AP_PREFIX = "FlightRadar-";
-constexpr const char* USER_AGENT = "DeskFlightRadar/" FW_VERSION " (ESP32-C6)";
+// Identifies the device to the services it uses, with where to find out more
+// (planespotters asks for a proper User-Agent).
+constexpr const char* USER_AGENT =
+    "DeskFlightRadar/" FW_VERSION " (ESP32-C6 desk gadget; +https://github.com/kyleken/desk-flight-radar)";
 
 }  // namespace cfg

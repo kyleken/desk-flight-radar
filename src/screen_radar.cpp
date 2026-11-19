@@ -127,6 +127,7 @@ class RadarScreen : public Screen {
       if (loading) selUntil_ = now + POPUP_SECONDS[g_set.popupIdx] * 1000;
     }
     if (selHex_ && (int32_t)(now - selUntil_) > 0) selHex_ = 0;
+    if (!selHex_ && photoHeld_) dropPhoto();  // photos aren't kept once the popup closes
 
     if (now - lastSecond_ > 1000) {
       lastSecond_ = now;
@@ -194,7 +195,11 @@ class RadarScreen : public Screen {
       selStart_ = now;
       photoOk_ = false;
       photoSerial_ = 0;
-      net::requestDetails(ac_[best]);
+      if (photoHeld_) {
+        photoHeld_ = false;
+        photo_.fillScreen(ui_c::PHOTO_BG);
+      }
+      net::requestDetails(ac_[best]);  // frees the previous download
     } else if (selHex_) {
       selHex_ = 0;
     }
@@ -705,6 +710,7 @@ class RadarScreen : public Screen {
           similar = g_details.photoSimilar;
           if (g_details.photoReady && g_details.photoSerial != photoSerial_) {
             photoSerial_ = g_details.photoSerial;
+            photoHeld_ = true;
             photo_.fillScreen(ui_c::PHOTO_BG);
             photoOk_ = photo_.drawJpg(g_details.photo, g_details.photoLen, 0, 0, cfg::PHOTO_W, cfg::PHOTO_H, 0, 0, 0.0f,
                                       0.0f, lgfx::datum_t::middle_center);
@@ -820,6 +826,14 @@ class RadarScreen : public Screen {
   uint32_t selHex_ = 0, selUntil_ = 0, selStart_ = 0;
   lgfx::LGFX_Sprite photo_{&display::lcd};
   uint32_t photoSerial_ = 0;
+  bool photoHeld_ = false;  // a photo is in memory (sprite and/or download)
+
+  void dropPhoto() {
+    photoHeld_ = false;
+    photoOk_ = false;
+    photo_.fillScreen(ui_c::PHOTO_BG);
+    net::releasePhoto();
+  }
   bool photoOk_ = false;
 
   Rwy rwys_[48];

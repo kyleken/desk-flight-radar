@@ -478,70 +478,66 @@ void doGeocode() {
 }
 
 // ---------------------------------------------------------------------------
-// Aircraft details: planespotters photo (via wsrv.nl) + adsbdb text.
-// Results are cached, and the nearest planes are looked up in advance so a
-// tap usually shows everything instantly.
+// Aircraft details: photo + type/owner/route text.
 //
-// The photo request is the one the adsb.fi map (tar1090) makes:
+// Planespotters' photo API terms (planespotters.net/photo/api): send a proper
+// User-Agent, credit the photographer, load the image unchanged from the
+// address the API returns (their CDN), don't proxy or keep it after it stops
+// being shown, and keep API answers for 24 h at most. So planespotters is
+// asked only when someone taps a plane, its image is downloaded as is and
+// dropped when the popup closes, and only the API answer is cached (60 min).
+//
+// The request is the one the adsb.fi map (tar1090) makes:
 //   api.planespotters.net/pub/photos/hex/{HEX}?reg={REG}&icaoType={TYPE}
-// The map then loads photos[0].thumbnail.src straight into the browser. The
-// board can't decode the progressive JPEGs that come back, so it asks wsrv.nl
-// for a small baseline copy instead, and checks every file before keeping it.
+// The on-chip decoder only draws baseline JPEGs; if planespotters' file is
+// progressive, the airport-data.com photo from adsbdb is used instead
+// (resized by wsrv.nl, as before).
 //
-// Only a definite answer is cached for long. A lookup that failed on the way
-// (timeout, busy server, out of memory) is retried on the next tap, and the
-// photo address is remembered so a retry goes straight to the download.
+// The nearest planes still get their text (adsbdb) looked up in advance.
 // ---------------------------------------------------------------------------
-constexpr int CACHE_N = 10;
-constexpr size_t CACHE_PHOTO_MAX = 8 * 1024;
+constexpr int CACHE_N = 12;
 constexpr uint32_t CACHE_TTL_MS = 60UL * 60 * 1000;
-constexpr uint32_t CACHE_NONE_TTL_MS = 30UL * 60 * 1000;  // "no photo on file"
-constexpr uint32_t CACHE_FAIL_TTL_MS = 2UL * 60 * 1000;   // something failed; prefetch retries after this
+constexpr uint32_t CACHE_FAIL_TTL_MS = 2UL * 60 * 1000;
 constexpr uint32_t PREFETCH_GAP_MS = 3000;
 constexpr int PREFETCH_NEAREST = 6;
+constexpr uint32_t PS_REFUSED_PAUSE_MS = 10UL * 60 * 1000;  // after a 403/429, leave planespotters alone
 
 enum PhotoState : uint8_t {
-  PH_UNKNOWN,  // not looked up yet
-  PH_HAVE,     // bytes cached
-  PH_URL,      // downloaded fine but too big to cache; address known
-  PH_NONE,     // planespotters and adsbdb both have nothing
-  PH_FAILED,   // a request failed; try again
+  PH_UNKNOWN,  // not looked for yet
+  PH_HAVE,     // shown (bytes are never cached)
+  PH_NONE,     // planespotters answered with nothing, and no backup photo
+  PH_FAILED,   // a request failed or the file can't be drawn
 };
 
 struct CacheEntry {
   uint32_t hex = 0;
   uint32_t at = 0;
   bool textOk = false;
+  bool psChecked = false;  // planespotters answered (photo or none)
+  bool psSimilar = false;
   uint8_t photoState = PH_UNKNOWN;
-  bool photoSimilar = false;
   char reg[12] = "";
   char typeName[40] = "";
   char airline[40] = "";
   char route[32] = "";
-  char photographer[32] = "";
-  char photoUrl[160] = "";
-  uint8_t* photo = nullptr;
-  size_t photoLen = 0;
+  char psPhotographer[32] = "";
+  char psUrl[160] = "";   // planespotters thumbnail (their CDN)
+  char altUrl[160] = "";  // airport-data.com thumbnail, from adsbdb
 };
 CacheEntry s_cache[CACHE_N];  // guarded by g_lock
 uint32_t s_lastPrefetch = 0;
-
-uint32_t cacheTtl(const CacheEntry& e) {
-  if (!e.textOk || e.photoState == PH_FAILED || e.photoState == PH_UNKNOWN) return CACHE_FAIL_TTL_MS;
-  if (e.photoState == PH_NONE) return CACHE_NONE_TTL_MS;
-  return CACHE_TTL_MS;
-}
+uint32_t s_psPausedUntil = 0;
 
 // Caller holds g_lock.
 CacheEntry* cacheFind(uint32_t hex) {
   for (auto& e : s_cache) {
-    if (e.hex == hex && millis() - e.at < cacheTtl(e)) return &e;
+    if (e.hex == hex && millis() - e.at < (e.textOk ? CACHE_TTL_MS : CACHE_FAIL_TTL_MS)) return &e;
   }
   return nullptr;
 }
 
-// Caller holds g_lock. Takes ownership of e.photo.
-void cacheStore(CacheEntry& e) {
+// Caller holds g_lock.
+void cacheStore(const CacheEntry& e) {
   CacheEntry* slot = nullptr;
   for (auto& c : s_cache) {
     if (c.hex == e.hex) { slot = &c; break; }
@@ -553,38 +549,41 @@ void cacheStore(CacheEntry& e) {
       if (c.at < slot->at) slot = &c;
     }
   }
-  if (slot->photo) free(slot->photo);
   *slot = e;
   slot->at = millis();
-  e.photo = nullptr;
 }
 
-// Caller holds g_lock. Copies whatever we know so far into the on-screen details.
-void publish(const CacheEntry& e, bool textDone, bool photoDone) {
+// Caller holds g_lock. Copies the text into the on-screen details.
+void publishText(const CacheEntry& e, bool done) {
   if (g_details.hex != e.hex) return;
   if (e.reg[0]) copyStr(g_details.reg, sizeof(g_details.reg), e.reg);
   if (e.typeName[0]) copyStr(g_details.typeName, sizeof(g_details.typeName), e.typeName);
   if (e.airline[0]) copyStr(g_details.airline, sizeof(g_details.airline), e.airline);
   if (e.route[0]) copyStr(g_details.route, sizeof(g_details.route), e.route);
-  if (e.photo && !g_details.photoReady) {
-    uint8_t* copy = (uint8_t*)malloc(e.photoLen);
-    if (copy) {
-      memcpy(copy, e.photo, e.photoLen);
-      g_details.photo = copy;
-      g_details.photoLen = e.photoLen;
-      g_details.photoReady = true;
-      g_details.photoSerial++;
-      g_details.photoSimilar = e.photoSimilar;
-      copyStr(g_details.photographer, sizeof(g_details.photographer), e.photographer);
-    }
+  if (done) g_details.state = D_DONE;
+}
+
+// Caller holds g_lock. Hands a downloaded photo to the screen (takes ownership).
+void publishPhoto(uint32_t hex, uint8_t* buf, size_t len, const char* credit, bool similar) {
+  if (g_details.hex != hex || g_details.photoReady) {
+    free(buf);
+    return;
   }
-  if (textDone) g_details.state = D_DONE;
-  if (photoDone) {
-    g_details.photoLoading = false;
-    if (!g_details.photoReady) {
-      g_details.photoNone = true;
-      g_details.photoFailed = e.photoState != PH_NONE;
-    }
+  g_details.photo = buf;
+  g_details.photoLen = len;
+  g_details.photoReady = true;
+  g_details.photoSerial++;
+  g_details.photoSimilar = similar;
+  copyStr(g_details.photographer, sizeof(g_details.photographer), credit);
+}
+
+// Caller holds g_lock.
+void publishPhotoDone(uint32_t hex, bool none) {
+  if (g_details.hex != hex) return;
+  g_details.photoLoading = false;
+  if (!g_details.photoReady) {
+    g_details.photoNone = true;
+    g_details.photoFailed = !none;
   }
 }
 
@@ -621,27 +620,27 @@ void urlEncode(char* out, size_t cap, const char* src) {
   out[e] = 0;
 }
 
-// True for a JPEG the on-chip decoder can draw (baseline). Progressive,
-// lossless and arithmetic-coded files, and anything that isn't a JPEG
-// (PNG, WebP, an HTML error page), are rejected.
-bool jpegDrawable(const uint8_t* p, size_t n) {
-  if (n < 4 || p[0] != 0xFF || p[1] != 0xD8) return false;
+// What kind of file this is, as far as the on-chip decoder is concerned.
+enum JpegKind : uint8_t { JK_BASELINE, JK_PROGRESSIVE, JK_OTHER };
+JpegKind jpegKind(const uint8_t* p, size_t n) {
+  if (n < 4 || p[0] != 0xFF || p[1] != 0xD8) return JK_OTHER;
   size_t i = 2;
   while (i + 4 <= n) {
-    if (p[i] != 0xFF) return false;
+    if (p[i] != 0xFF) return JK_OTHER;
     uint8_t m = p[i + 1];
     if (m == 0xFF) { ++i; continue; }  // fill byte
     if (m == 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
-    if (m == 0xC0 || m == 0xC1) return true;  // baseline / extended sequential
-    if (m >= 0xC2 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) return false;
-    if (m == 0xDA || m == 0xD9) return false;  // image data before a frame header
+    if (m == 0xC0 || m == 0xC1) return JK_BASELINE;
+    if (m == 0xC2 || m == 0xC6 || m == 0xCA || m == 0xCE) return JK_PROGRESSIVE;
+    if (m >= 0xC3 && m <= 0xCF && m != 0xC4 && m != 0xC8 && m != 0xCC) return JK_OTHER;
+    if (m == 0xDA || m == 0xD9) return JK_OTHER;
     i += 2 + ((p[i + 2] << 8) | p[i + 3]);
   }
-  return false;
+  return JK_OTHER;
 }
 
-// Worth another go: no connection, timeout, or the server was busy.
-bool transient(int code) { return code <= 0 || code == 429 || code >= 500; }
+// Worth another go: no connection, timeout, or the server had a problem.
+bool transient(int code) { return code <= 0 || code >= 500; }
 
 // One download attempt; keeps the file only if it can be drawn.
 bool tryDownload(const char* url, const char* label, uint8_t** buf, size_t* len, int* code) {
@@ -649,10 +648,13 @@ bool tryDownload(const char* url, const char* label, uint8_t** buf, size_t* len,
   *buf = nullptr;
   *len = 0;
   bool ok = getBytes(url, buf, len, cfg::PHOTO_MAX_BYTES, code);
-  bool drawable = ok && jpegDrawable(*buf, *len);
+  JpegKind kind = ok ? jpegKind(*buf, *len) : JK_OTHER;
   Serial.printf("photo: %s HTTP %d, %u bytes, %lu ms%s\n", label, *code, (unsigned)*len,
-                (unsigned long)(millis() - t0), ok && !drawable ? " (not a baseline JPEG, skipped)" : "");
-  if (ok && !drawable) {
+                (unsigned long)(millis() - t0),
+                !ok ? "" : kind == JK_PROGRESSIVE ? " (progressive JPEG, can't draw)"
+                         : kind == JK_OTHER       ? " (not a JPEG the board can draw)"
+                                                  : "");
+  if (ok && kind != JK_BASELINE) {
     free(*buf);
     *buf = nullptr;
     *len = 0;
@@ -661,10 +663,20 @@ bool tryDownload(const char* url, const char* label, uint8_t** buf, size_t* len,
   return ok;
 }
 
-// Download a photo resized to the photo box by wsrv.nl (always a baseline
-// JPEG); one retry if the first try failed on the way; then the original
-// file, used only if it happens to be baseline.
-bool fetchPhoto(const char* src, uint8_t** buf, size_t* len) {
+// Planespotters: their file, unchanged, straight from their CDN.
+bool fetchPlanespottersPhoto(const char* src, uint8_t** buf, size_t* len) {
+  int code = 0;
+  if (tryDownload(src, "planespotters image", buf, len, &code)) return true;
+  if (transient(code)) {
+    delay(600);
+    return tryDownload(src, "planespotters image (retry)", buf, len, &code);
+  }
+  return false;
+}
+
+// Other photos (airport-data.com): resized by wsrv.nl into a small baseline
+// JPEG, one retry, then the original file if it happens to be drawable.
+bool fetchResizedPhoto(const char* src, uint8_t** buf, size_t* len) {
   char enc[300];
   urlEncode(enc, sizeof(enc), src);
   char url[400];
@@ -679,188 +691,168 @@ bool fetchPhoto(const char* src, uint8_t** buf, size_t* len) {
   return tryDownload(src, "direct", buf, len, &code);
 }
 
-// Looks one aircraft up. interactive = the user tapped it (publish as we go).
-// A prefetch gives way as soon as the user taps a different plane.
+// Asks planespotters which photo goes with this aircraft. Fills e.psUrl etc.
+void askPlanespotters(const Aircraft& ac, const char* hex, CacheEntry& e) {
+  if ((int32_t)(s_psPausedUntil - millis()) > 0) {
+    Serial.println("photo: planespotters paused after it refused a request");
+    return;
+  }
+  JsonDocument pf;
+  pf["photos"][0]["thumbnail"] = true;  // {"src":…}, or a plain string on look-alike services
+  pf["photos"][0]["thumbnail_large"]["src"] = true;
+  pf["photos"][0]["photographer"] = true;
+  pf["photos"][0]["link"] = true;
+
+  auto ask = [&](const char* u) -> bool {  // true = got an answer
+    int code = 0;
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      JsonDocument pd;
+      if (getJson(u, pd, &pf, &code)) {
+        JsonVariantConst p0 = pd["photos"][0];
+        JsonVariantConst th = p0["thumbnail"];
+        const char* src = th.is<const char*>() ? th.as<const char*>() : (th["src"] | "");
+        if (!*src) src = p0["thumbnail_large"]["src"] | "";
+        copyStr(e.psUrl, sizeof(e.psUrl), src);
+        copyStr(e.psPhotographer, sizeof(e.psPhotographer), p0["photographer"] | "");
+        // The photo page's address contains the pictured aircraft's registration.
+        const char* link = p0["link"] | "";
+        e.psSimilar = e.psUrl[0] && ac.reg[0] && *link && !containsNoCase(link, ac.reg);
+        Serial.printf("photo: planespotters -> %s%s\n", e.psUrl[0] ? e.psUrl : "(none on file)",
+                      e.psSimilar ? " (same type, different aircraft)" : "");
+        return true;
+      }
+      if (code == 403 || code == 429) {
+        s_psPausedUntil = millis() + PS_REFUSED_PAUSE_MS;
+        Serial.printf("photo: planespotters refused the request (HTTP %d); pausing it for 10 min\n", code);
+        return false;
+      }
+      Serial.printf("photo: planespotters HTTP %d%s\n", code, transient(code) && !attempt ? ", retrying" : "");
+      if (!transient(code)) return false;
+      delay(800);
+    }
+    return false;
+  };
+
+  char reg[32] = "", type[16] = "", q[64] = "", url[200];
+  urlEncode(reg, sizeof(reg), ac.reg);
+  urlEncode(type, sizeof(type), ac.type);
+  if (reg[0] && type[0]) snprintf(q, sizeof(q), "?reg=%s&icaoType=%s", reg, type);
+  else if (reg[0]) snprintf(q, sizeof(q), "?reg=%s", reg);
+  else if (type[0]) snprintf(q, sizeof(q), "?icaoType=%s", type);
+  snprintf(url, sizeof(url), "https://api.planespotters.net/pub/photos/hex/%s%s", hex, q);
+  e.psChecked = ask(url);
+}
+
+// adsbdb: type, owner/airline, route, and the airport-data.com photo address.
+void askAdsbdb(const Aircraft& ac, const char* hex, CacheEntry& e) {
+  char url[200];
+  if (ac.flight[0]) snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/aircraft/%s?callsign=%s", hex, ac.flight);
+  else snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/aircraft/%s", hex);
+  JsonDocument filter;
+  JsonObject fa = filter["response"]["aircraft"].to<JsonObject>();
+  for (const char* k : {"type", "manufacturer", "registration", "registered_owner", "url_photo_thumbnail"}) fa[k] = true;
+  JsonObject fr = filter["response"]["flightroute"].to<JsonObject>();
+  fr["airline"]["name"] = true;
+  for (const char* side : {"origin", "destination"}) {
+    fr[side]["iata_code"] = true;
+    fr[side]["icao_code"] = true;
+  }
+  JsonDocument doc;
+  int code = 0;
+  if (getJson(url, doc, &filter, &code)) {
+    e.textOk = true;
+    JsonObjectConst a = doc["response"]["aircraft"];
+    JsonObjectConst rt = doc["response"]["flightroute"];
+    const char* manu = a["manufacturer"] | "";
+    const char* type = a["type"] | "";
+    if (*type) {
+      if (*manu && strncasecmp(type, manu, strlen(manu)) != 0) snprintf(e.typeName, sizeof(e.typeName), "%s %s", manu, type);
+      else copyStr(e.typeName, sizeof(e.typeName), type);
+    }
+    const char* reg = a["registration"] | "";
+    if (*reg) copyStr(e.reg, sizeof(e.reg), reg);
+    const char* airline = rt["airline"]["name"] | (const char*)(a["registered_owner"] | "");
+    copyStr(e.airline, sizeof(e.airline), airline);
+    const char* o = rt["origin"]["iata_code"] | (const char*)(rt["origin"]["icao_code"] | "");
+    const char* d = rt["destination"]["iata_code"] | (const char*)(rt["destination"]["icao_code"] | "");
+    if (*o && *d) snprintf(e.route, sizeof(e.route), "%s \xE2\x86\x92 %s", o, d);
+    copyStr(e.altUrl, sizeof(e.altUrl), a["url_photo_thumbnail"] | "");
+  } else if (code == 404) {
+    e.textOk = true;  // adsbdb doesn't know this aircraft; that's an answer too
+  }
+  if (!e.typeName[0] && ac.desc[0]) {
+    copyStr(e.typeName, sizeof(e.typeName), ac.desc);
+    titleCase(e.typeName);
+  }
+}
+
+// interactive = the user tapped it: photo first, then text.
+// Otherwise (prefetch) only the text is looked up; it gives way as soon as
+// the user taps a different plane.
 void lookup(const Aircraft& ac, bool interactive) {
   uint32_t t0 = millis();
   CacheEntry e;
   {
-    // pick up what an earlier, partly failed lookup already found
     Lock l;
-    if (const CacheEntry* c = cacheFind(ac.hex)) {
-      e = *c;
-      e.photo = nullptr;  // the cache keeps its own copy
-      e.photoLen = 0;
-      if (c->photo) {
-        e.photo = (uint8_t*)malloc(c->photoLen);
-        if (e.photo) {
-          memcpy(e.photo, c->photo, c->photoLen);
-          e.photoLen = c->photoLen;
-        }
-      }
-    }
+    if (const CacheEntry* c = cacheFind(ac.hex)) e = *c;  // what an earlier lookup found
   }
   e.hex = ac.hex;
   if (!e.reg[0]) copyStr(e.reg, sizeof(e.reg), ac.reg);
   char hex[8];
   snprintf(hex, sizeof(hex), "%06X", (unsigned)ac.hex);
 
-  // true if we should stop; also turns a prefetch into the tapped lookup
-  auto interrupted = [&]() -> bool {
-    if (!s_detailsReq) return false;
-    Lock l;
-    if (s_detailsAc.hex == ac.hex) {
-      s_detailsReq = false;
-      interactive = true;
-      publish(e, e.textOk, false);
-      return false;
+  // 1. photo (tap only; shown first, it's what people look at)
+  bool shown = false;
+  if (interactive) {
+    if (!e.psChecked) askPlanespotters(ac, hex, e);
+    if (e.psUrl[0]) {
+      uint8_t* buf = nullptr;
+      size_t len = 0;
+      if (fetchPlanespottersPhoto(e.psUrl, &buf, &len)) {
+        Lock l;
+        publishPhoto(ac.hex, buf, len, e.psPhotographer, e.psSimilar);
+        shown = true;
+      }
     }
+  }
+
+  // Another plane tapped meanwhile? Keep what we found and move on.
+  auto superseded = [&]() -> bool {
+    if (!interactive || !s_detailsReq) return false;
+    Lock l;
+    cacheStore(e);
     return true;
   };
-  auto abandon = [&]() {
-    if (e.photo) free(e.photo);
-  };
+  if (superseded()) return;
 
-  // 1. photo (shown first; it's what people look at)
-  bool apiAnswered = false;  // planespotters gave a definite answer (photo or none)
-  if (!e.photo) {
-    char url[200];
-    if (!e.photoUrl[0]) {
-      auto planespotters = [&](const char* u) {
-        JsonDocument pf;
-        pf["photos"][0]["thumbnail"] = true;  // {"src":…} on planespotters, a plain string on look-alikes
-        pf["photos"][0]["thumbnail_large"]["src"] = true;
-        pf["photos"][0]["photographer"] = true;
-        pf["photos"][0]["link"] = true;
-        int code = 0;
-        for (int attempt = 0; attempt < 2; ++attempt) {
-          JsonDocument pd;
-          if (getJson(u, pd, &pf, &code)) {
-            apiAnswered = true;
-            JsonVariantConst p0 = pd["photos"][0];
-            JsonVariantConst th = p0["thumbnail"];
-            const char* src = th.is<const char*>() ? th.as<const char*>() : (th["src"] | "");
-            if (!*src) src = p0["thumbnail_large"]["src"] | "";
-            copyStr(e.photoUrl, sizeof(e.photoUrl), src);
-            copyStr(e.photographer, sizeof(e.photographer), p0["photographer"] | "");
-            // The photo page's address contains the pictured aircraft's registration.
-            const char* link = p0["link"] | "";
-            e.photoSimilar = e.photoUrl[0] && ac.reg[0] && *link && !containsNoCase(link, ac.reg);
-            break;
-          }
-          Serial.printf("photo: planespotters HTTP %d%s\n", code, transient(code) && !attempt ? ", retrying" : "");
-          if (!transient(code)) break;
-          delay(800);
-        }
-        Serial.printf("photo: planespotters -> %s%s\n", e.photoUrl[0] ? e.photoUrl : "(none)",
-                      e.photoSimilar ? " (same type, different aircraft)" : "");
-      };
-      char reg[32] = "", type[16] = "", q[64] = "";
-      urlEncode(reg, sizeof(reg), ac.reg);
-      urlEncode(type, sizeof(type), ac.type);
-      if (reg[0] && type[0]) snprintf(q, sizeof(q), "?reg=%s&icaoType=%s", reg, type);
-      else if (reg[0]) snprintf(q, sizeof(q), "?reg=%s", reg);
-      else if (type[0]) snprintf(q, sizeof(q), "?icaoType=%s", type);
-      snprintf(url, sizeof(url), "https://api.planespotters.net/pub/photos/hex/%s%s", hex, q);
-      planespotters(url);
-      if (interrupted()) return abandon();
-      if (!e.photoUrl[0] && reg[0]) {
-        bool first = apiAnswered;
-        apiAnswered = false;
-        snprintf(url, sizeof(url), "https://api.planespotters.net/pub/photos/reg/%s", reg);
-        planespotters(url);
-        apiAnswered = apiAnswered && first;
-        if (interrupted()) return abandon();
-      }
-    }
-    if (e.photoUrl[0]) {
-      if (fetchPhoto(e.photoUrl, &e.photo, &e.photoLen)) e.photoState = PH_HAVE;
-      if (interactive) {
-        Lock l;
-        publish(e, e.textOk, false);
-      }
-      if (interrupted()) return abandon();
-    }
+  // 2. text: type, owner/airline, route (+ the backup photo's address)
+  if (!e.textOk || (interactive && !shown && !e.altUrl[0])) askAdsbdb(ac, hex, e);
+  if (interactive) {
+    Lock l;
+    publishText(e, true);
   }
 
-  // 2. text: type, owner/airline, route
-  char fallbackPhoto[160] = "";
-  if (!e.textOk || !e.photo) {  // adsbdb also has the backup photo
-    char url[200];
-    if (ac.flight[0]) snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/aircraft/%s?callsign=%s", hex, ac.flight);
-    else snprintf(url, sizeof(url), "https://api.adsbdb.com/v0/aircraft/%s", hex);
-    JsonDocument filter;
-    JsonObject fa = filter["response"]["aircraft"].to<JsonObject>();
-    for (const char* k : {"type", "manufacturer", "registration", "registered_owner", "url_photo_thumbnail"}) fa[k] = true;
-    JsonObject fr = filter["response"]["flightroute"].to<JsonObject>();
-    fr["airline"]["name"] = true;
-    for (const char* side : {"origin", "destination"}) {
-      fr[side]["iata_code"] = true;
-      fr[side]["icao_code"] = true;
-    }
-    JsonDocument doc;
-    int code = 0;
-    if (getJson(url, doc, &filter, &code)) {
-      e.textOk = true;
-      JsonObjectConst a = doc["response"]["aircraft"];
-      JsonObjectConst rt = doc["response"]["flightroute"];
-      const char* manu = a["manufacturer"] | "";
-      const char* type = a["type"] | "";
-      if (*type) {
-        if (*manu && strncasecmp(type, manu, strlen(manu)) != 0) snprintf(e.typeName, sizeof(e.typeName), "%s %s", manu, type);
-        else copyStr(e.typeName, sizeof(e.typeName), type);
-      }
-      const char* reg = a["registration"] | "";
-      if (*reg) copyStr(e.reg, sizeof(e.reg), reg);
-      const char* airline = rt["airline"]["name"] | (const char*)(a["registered_owner"] | "");
-      copyStr(e.airline, sizeof(e.airline), airline);
-      const char* o = rt["origin"]["iata_code"] | (const char*)(rt["origin"]["icao_code"] | "");
-      const char* d = rt["destination"]["iata_code"] | (const char*)(rt["destination"]["icao_code"] | "");
-      if (*o && *d) snprintf(e.route, sizeof(e.route), "%s \xE2\x86\x92 %s", o, d);
-      copyStr(fallbackPhoto, sizeof(fallbackPhoto), a["url_photo_thumbnail"] | "");
-    } else if (code == 404) {
-      e.textOk = true;  // adsbdb doesn't know this aircraft; that's an answer too
-    }
-    if (!e.typeName[0] && ac.desc[0]) {
-      copyStr(e.typeName, sizeof(e.typeName), ac.desc);
-      titleCase(e.typeName);
-    }
-    if (interactive) {
-      Lock l;
-      publish(e, true, false);
-    }
-    if (interrupted()) return abandon();
-  }
+  if (superseded()) return;
 
-  // 3. no planespotters photo? try airport-data.com's
-  if (!e.photo && fallbackPhoto[0] && strcmp(fallbackPhoto, e.photoUrl) != 0) {
+  // 3. no planespotters photo we can draw? use airport-data.com's
+  if (interactive && !shown && e.altUrl[0]) {
     uint8_t* buf = nullptr;
     size_t len = 0;
-    if (fetchPhoto(fallbackPhoto, &buf, &len)) {
-      e.photo = buf;
-      e.photoLen = len;
-      e.photoState = PH_HAVE;
-      e.photoSimilar = false;
-      copyStr(e.photoUrl, sizeof(e.photoUrl), fallbackPhoto);
-      copyStr(e.photographer, sizeof(e.photographer), "airport-data.com");
+    if (fetchResizedPhoto(e.altUrl, &buf, &len)) {
+      Lock l;
+      publishPhoto(ac.hex, buf, len, "airport-data.com", false);
+      shown = true;
     }
   }
 
-  if (!e.photo) {
-    // "none" only when planespotters answered and adsbdb had nothing either
-    e.photoState = (!e.photoUrl[0] && apiAnswered && e.textOk && !fallbackPhoto[0]) ? PH_NONE : PH_FAILED;
+  if (interactive) {
+    // "none" only when planespotters answered with nothing and there's no backup photo
+    e.photoState = shown ? PH_HAVE : (e.psChecked && !e.psUrl[0] && e.textOk && !e.altUrl[0]) ? PH_NONE : PH_FAILED;
   }
-
   Lock l;
-  if (interactive) publish(e, true, true);
-  if (e.photo && e.photoLen > CACHE_PHOTO_MAX) {  // too big to keep; the address is enough to get it again
-    free(e.photo);
-    e.photo = nullptr;
-    e.photoLen = 0;
-    e.photoState = PH_URL;
-  }
+  if (interactive) publishPhotoDone(ac.hex, e.photoState == PH_NONE);
   cacheStore(e);
-  static const char* const STATE[] = {"?", "photo", "photo (not cached)", "no photo on file", "photo failed"};
+  static const char* const STATE[] = {"text only", "photo", "no photo on file", "photo failed"};
   Serial.printf("details %s: %s, %s, text %s, %lu ms\n", hex, interactive ? "tap" : "prefetch", STATE[e.photoState],
                 e.textOk ? "ok" : "failed", (unsigned long)(millis() - t0));
 }
@@ -993,14 +985,23 @@ void requestDetails(const Aircraft& ac) {
   g_details.state = D_LOADING;
   g_details.photoLoading = true;
   strncpy(g_details.reg, ac.reg, sizeof(g_details.reg) - 1);
-  if (CacheEntry* e = cacheFind(ac.hex)) {  // already looked up: show what we have now
-    bool photoFinal = e->photo || e->photoState == PH_NONE;
-    publish(*e, e->textOk, photoFinal);
-    if (photoFinal && e->textOk) return;
-    // otherwise fetch the missing part (a cached photo address skips the API call)
+  if (CacheEntry* e = cacheFind(ac.hex)) {  // text looked up already: show it now
+    publishText(*e, e->textOk);
+    if (e->textOk && e->photoState == PH_NONE) {  // and we know there's no photo
+      publishPhotoDone(ac.hex, true);
+      return;
+    }
   }
   s_detailsAc = ac;
   s_detailsReq = true;
+}
+
+// The popup closed: the photo isn't kept once it's off the screen.
+void releasePhoto() {
+  Lock l;
+  if (g_details.photo) free(g_details.photo);
+  g_details.photo = nullptr;
+  g_details.photoLen = 0;
 }
 
 bool localTime(struct tm& out) {

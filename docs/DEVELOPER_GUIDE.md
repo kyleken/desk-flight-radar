@@ -101,23 +101,27 @@ Each screen derives from `ui::Screen` (`enter`, `leave`, `render`, `onDown`, `on
 
 ### Tapped-plane details
 
-`net::requestDetails()` serves straight from a 10-entry cache when possible. Otherwise the net
-task looks up, **photo first**: planespotters `/pub/photos/hex/{hex}?reg=…&icaoType=…`
-(same request as the tar1090/adsb.fi map, which returns a same-type photo when there's no exact
-match), then `/reg/{reg}`, then adsbdb `/v0/aircraft/{hex}?callsign=…` for type, owner and route,
-then airport-data's thumbnail as a last resort. Photos are fetched through
-`wsrv.nl/?url=…&w=88&h=59&fit=cover&output=jpg` so they arrive as small **baseline** JPEGs
-(the on-chip decoder can't read progressive JPEGs). Every file is checked with
-`jpegDrawable()` (SOF0/SOF1 only) before it's kept; on a failed resize the task retries once
-for transient errors (no connection, timeout, 429, 5xx) and then tries the original file.
+Photos follow planespotters' photo API terms (planespotters.net/photo/api): a proper
+User-Agent (`cfg::USER_AGENT`, with the project URL), photographer credit on screen, the image
+loaded **unchanged from the address the API returns**, not proxied, not kept after it stops
+being shown, and API answers cached for at most 24 h.
 
-The cache records a photo state per aircraft: `PH_HAVE` (bytes ≤ 8 KB kept, 60 min),
-`PH_URL` (too big to keep, address kept, 60 min), `PH_NONE` (planespotters answered with
-nothing and adsbdb has no backup photo, 30 min) and `PH_FAILED` (something failed, 2 min).
-A tap on a cached plane shows what's there and re-runs only the missing part; a cached photo
-address skips the planespotters call. When idle, the task pre-fetches the six
-nearest uncached aircraft, one every 3 s, if free heap is above 70 KB. A tap interrupts a
-running aircraft fetch.
+On a **tap**, the net task asks planespotters `/pub/photos/hex/{HEX}?reg=…&icaoType=…` (the
+same request as the tar1090/adsb.fi map, which returns a same-type photo when there's no exact
+match) and downloads `photos[0].thumbnail.src` straight from their CDN. The on-chip decoder only
+draws **baseline** JPEGs, so every file goes through `jpegKind()` first. If planespotters has
+nothing, or its file is progressive, or it can't be reached, the airport-data.com thumbnail that
+adsbdb lists is used instead, resized by `wsrv.nl/?url=…&w=88&h=59&fit=cover&output=jpg`.
+adsbdb `/v0/aircraft/{hex}?callsign=…` supplies type, owner and route.
+
+If planespotters answers 403 or 429, it isn't asked again for 10 minutes. Downloads retry once
+after a connection error, timeout or 5xx.
+
+The 12-entry cache keeps **text and addresses only, never image bytes** (60 min; 2 min if the
+text lookup failed). `releasePhoto()` frees the download, and the photo sprite is cleared, as
+soon as the popup closes. When idle, the task looks up the **text** of the six nearest uncached
+aircraft, one every 3 s, if free heap is above 70 KB; planespotters is never asked in advance.
+A tap interrupts a running aircraft fetch, and a second tap cuts the previous lookup short.
 
 ### Wi-Fi
 
@@ -159,7 +163,7 @@ Saved sizes so far: v1.0.0–1.0.6 = 192 bytes, v1.0.7+ = 200 bytes.
 | `PHOTO_MAX_BYTES` | 40 KB |
 | Details cache / prefetch | 10 entries / nearest 6, every 3 s (`net.cpp`) |
 
-Memory at build: ~98 KB static RAM of 320 KB; ~1.6 MB of the 6.5 MB app partition.
+Memory at build: ~100 KB static RAM of 320 KB; ~1.6 MB of the 6.5 MB app partition.
 
 ## 6. Serial log
 
@@ -167,18 +171,19 @@ Connect at 115200 baud (`pio device monitor`). Useful lines:
 
 | Message | Meaning |
 |---|---|
-| `Desk Flight Radar v1.0.10`, `heap free: …` | Boot |
+| `Desk Flight Radar v1.0.11`, `heap free: …` | Boot |
 | `board: I/O expander not responding` | CH32V003 didn't answer (check I2C) |
 | `wifi: connecting / connected, IP … / lost connection` | Wi-Fi state |
 | `wifi: attempt failed (wrong password, reason 15)` | Why a connection failed |
 | `adsb: failed (HTTP n)` | Aircraft fetch failed (negative n = connection error) |
 | `weather: ok (HTTP 200) in 1450 ms` | Weather fetch |
-| `photo: planespotters -> https://t.plnspttrs.net/…` | Photo lookup (`(none)` = nothing on file; `(same type, different aircraft)` for a stand-in) |
-| `photo: planespotters HTTP -1, retrying` | Lookup failed on the way; retried once |
-| `photo: resized HTTP 200, 2843 bytes, 900 ms` | Photo download via wsrv.nl (`direct` = original file) |
-| `… (not a baseline JPEG, skipped)` | File the decoder can't draw |
+| `photo: planespotters -> https://t.plnspttrs.net/…` | Photo lookup (`(none on file)`; `(same type, different aircraft)` for a stand-in) |
+| `photo: planespotters refused the request (HTTP 403)` | Planespotters blocked the request; paused for 10 min |
+| `photo: planespotters image HTTP 200, 9120 bytes, 600 ms` | Planespotters image, downloaded as is |
+| `… (progressive JPEG, can't draw)` | File the decoder can't draw; the backup photo is tried |
+| `photo: resized HTTP 200, 2843 bytes, 900 ms` | Backup (airport-data.com) photo via wsrv.nl (`direct` = original file) |
 | `photo: decode failed (n bytes)` | Drawing failed on screen |
-| `details A1B2C3: tap, photo, text ok, 2100 ms` | Lookup result: `photo`, `photo (not cached)`, `no photo on file` or `photo failed` |
+| `details A1B2C3: tap, photo, text ok, 2100 ms` | Result: `photo`, `no photo on file`, `photo failed` (`prefetch` = text only) |
 | `portal: started FlightRadar-XXXX / stopped` | Setup hotspot |
 | `audio: ES8311 not responding` | Codec didn't answer |
 
