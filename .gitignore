@@ -1,0 +1,7 @@
+.pio/
+.vscode/
+tools/simulator/build/
+tools/simulator/out/
+tools/simulator/lgfx_obj/
+*.ppm
+__pycache__/
