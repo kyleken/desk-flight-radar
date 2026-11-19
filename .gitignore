@@ -5,3 +5,6 @@ tools/simulator/out/
 tools/simulator/lgfx_obj/
 *.ppm
 __pycache__/
+tools/jpeg_test/harness
+tools/jpeg_test/*.jpg
+tools/jpeg_test/*.raw

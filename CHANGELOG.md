@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.12 (2026-11-19): planespotters photos show
+- Planespotters' photos now appear. Since 1.0.11 they arrived, but they're progressive JPEGs,
+  which the display library can't decode. The board now has its own small JPEG decoder
+  (baseline and progressive) that decodes each photo at reduced size straight into the photo
+  box, in about 30–55 KB of memory.
+- Photos are cropped to fill the box, the same for every source.
+- Decoder tests in `tools/jpeg_test/`.
+
 ## 1.0.11 (2026-11-19): photos follow planespotters' rules
 - Fixed: planespotters refused the board's photo requests (HTTP 403), so planes showed "Photo
   failed" even when adsb.fi had a photo. The board now follows planespotters' photo API terms:

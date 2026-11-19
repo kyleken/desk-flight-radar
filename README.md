@@ -1,6 +1,6 @@
 # Desk Flight Radar
 
-**v1.0.11** · firmware for the **Waveshare ESP32-C6-Touch-LCD-2.8**
+**v1.0.12** · firmware for the **Waveshare ESP32-C6-Touch-LCD-2.8**
 
 A live aircraft radar for your desk. The top of the 2.8" screen is a 43.2 × 43.2 mm square radar
 (exactly 240 × 240 px) showing the planes around you, dead-reckoned between updates so they move
@@ -13,7 +13,7 @@ plane to see its photo, tail number, type, airline and route.
 
 | I want to… | Read |
 |---|---|
-| Flash boards | [docs/FLASHING.md](docs/FLASHING.md) · file: [`release/FlightRadar-v1.0.11.bin`](release/) at `0x0` |
+| Flash boards | [docs/FLASHING.md](docs/FLASHING.md) · file: [`release/FlightRadar-v1.0.12.bin`](release/) at `0x0` |
 | Prepare gifts (test, reset, pack) | [docs/PRODUCTION_CHECKLIST.md](docs/PRODUCTION_CHECKLIST.md) |
 | Print the card for the box | [docs/QuickStart-Card.pdf](docs/QuickStart-Card.pdf) (5 × 7 in, two-sided) |
 | Set up and use the radar | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) |
@@ -43,13 +43,14 @@ plane to see its photo, tail number, type, airline and route.
 ## Package contents
 
 ```
-release/               FlightRadar-v1.0.11.bin (flash at 0x0) and SHA256SUMS.txt
+release/               FlightRadar-v1.0.12.bin (flash at 0x0) and SHA256SUMS.txt
 docs/                  guides, QuickStart-Card.pdf, screens/ (rendered from the real UI code)
 src/                   firmware source (C++, Arduino-ESP32 + LovyanGFX)
 fonts/                 Inter and JetBrains Mono TTFs used to generate src/fonts_data.h
 tools/make_fonts.py    regenerates the fonts
 tools/make_card.py     regenerates the quick-start card
 tools/simulator/       renders every screen on Linux without a board
+tools/jpeg_test/       tests for the photo decoder (src/jpeg_small.cpp)
 third_party/           license texts
 platformio.ini         build configuration
 ```

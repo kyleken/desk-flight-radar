@@ -58,7 +58,7 @@ struct Details {
   bool photoNone = false;      // no photo to show
   bool photoFailed = false;    // ...because a download failed (the next tap tries again)
   bool photoSimilar = false;   // photo is the same type, not this exact aircraft
-  uint8_t* photo = nullptr;
+  uint8_t* photo = nullptr;    // PHOTO_W x PHOTO_H RGB565 pixels (r5<<11 | g6<<5 | b5)
   size_t photoLen = 0;
   uint32_t photoSerial = 0;    // bumps when a new photo arrives
 };

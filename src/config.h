@@ -2,7 +2,7 @@
 #pragma once
 #include <Arduino.h>
 
-#define FW_VERSION "1.0.11"
+#define FW_VERSION "1.0.12"
 
 namespace cfg {
 

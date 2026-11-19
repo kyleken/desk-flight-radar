@@ -6,6 +6,7 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <time.h>
+#include "jpeg_small.h"
 #include "settings.h"
 
 SemaphoreHandle_t g_lock;
@@ -489,9 +490,11 @@ void doGeocode() {
 //
 // The request is the one the adsb.fi map (tar1090) makes:
 //   api.planespotters.net/pub/photos/hex/{HEX}?reg={REG}&icaoType={TYPE}
-// The on-chip decoder only draws baseline JPEGs; if planespotters' file is
-// progressive, the airport-data.com photo from adsbdb is used instead
-// (resized by wsrv.nl, as before).
+// Planespotters' thumbnails are progressive JPEGs, which the display
+// library's decoder can't read, so every photo is decoded here by
+// jpeg_small (baseline and progressive) straight into the 88x59 photo box.
+// If planespotters has none, the airport-data.com photo from adsbdb is used
+// (resized by wsrv.nl first).
 //
 // The nearest planes still get their text (adsbdb) looked up in advance.
 // ---------------------------------------------------------------------------
@@ -642,7 +645,7 @@ JpegKind jpegKind(const uint8_t* p, size_t n) {
 // Worth another go: no connection, timeout, or the server had a problem.
 bool transient(int code) { return code <= 0 || code >= 500; }
 
-// One download attempt; keeps the file only if it can be drawn.
+// One download attempt; keeps the file only if it is a JPEG we can decode.
 bool tryDownload(const char* url, const char* label, uint8_t** buf, size_t* len, int* code) {
   uint32_t t0 = millis();
   *buf = nullptr;
@@ -651,10 +654,8 @@ bool tryDownload(const char* url, const char* label, uint8_t** buf, size_t* len,
   JpegKind kind = ok ? jpegKind(*buf, *len) : JK_OTHER;
   Serial.printf("photo: %s HTTP %d, %u bytes, %lu ms%s\n", label, *code, (unsigned)*len,
                 (unsigned long)(millis() - t0),
-                !ok ? "" : kind == JK_PROGRESSIVE ? " (progressive JPEG, can't draw)"
-                         : kind == JK_OTHER       ? " (not a JPEG the board can draw)"
-                                                  : "");
-  if (ok && kind != JK_BASELINE) {
+                !ok ? "" : kind == JK_PROGRESSIVE ? " (progressive)" : kind == JK_OTHER ? " (not a JPEG, skipped)" : "");
+  if (ok && kind == JK_OTHER) {
     free(*buf);
     *buf = nullptr;
     *len = 0;
@@ -689,6 +690,33 @@ bool fetchResizedPhoto(const char* src, uint8_t** buf, size_t* len) {
     if (tryDownload(url, "resized (retry)", buf, len, &code)) return true;
   }
   return tryDownload(src, "direct", buf, len, &code);
+}
+
+// Decodes a downloaded JPEG into the photo box's pixels (RGB565, cropped to
+// fill it). Frees the file. Returns the pixels (caller frees) or nullptr.
+constexpr size_t PHOTO_PX_BYTES = (size_t)cfg::PHOTO_W * cfg::PHOTO_H * 2;
+uint16_t* decodePhoto(uint8_t* file, size_t len) {
+  uint16_t* px = (uint16_t*)malloc(PHOTO_PX_BYTES);
+  if (!px) {
+    free(file);
+    Serial.println("photo: no memory for the picture");
+    return nullptr;
+  }
+  // Work memory: what's free, minus a reserve for Wi-Fi and the next TLS connection.
+  size_t freeHeap = ESP.getFreeHeap();
+  size_t budget = freeHeap > 45000 ? freeHeap - 45000 : 0;
+  if (budget > 110 * 1024) budget = 110 * 1024;
+  const char* why = nullptr;
+  uint32_t t0 = millis();
+  bool ok = jpeg_small::decodeCover(file, len, px, cfg::PHOTO_W, cfg::PHOTO_H, budget, &why);
+  free(file);
+  Serial.printf("photo: decode %s in %lu ms (heap %u, budget %u)%s%s\n", ok ? "ok" : "failed",
+                (unsigned long)(millis() - t0), (unsigned)freeHeap, (unsigned)budget, ok ? "" : ": ", ok ? "" : why);
+  if (!ok) {
+    free(px);
+    return nullptr;
+  }
+  return px;
 }
 
 // Asks planespotters which photo goes with this aircraft. Fills e.psUrl etc.
@@ -809,9 +837,11 @@ void lookup(const Aircraft& ac, bool interactive) {
       uint8_t* buf = nullptr;
       size_t len = 0;
       if (fetchPlanespottersPhoto(e.psUrl, &buf, &len)) {
-        Lock l;
-        publishPhoto(ac.hex, buf, len, e.psPhotographer, e.psSimilar);
-        shown = true;
+        if (uint16_t* px = decodePhoto(buf, len)) {
+          Lock l;
+          publishPhoto(ac.hex, (uint8_t*)px, PHOTO_PX_BYTES, e.psPhotographer, e.psSimilar);
+          shown = true;
+        }
       }
     }
   }
@@ -839,9 +869,11 @@ void lookup(const Aircraft& ac, bool interactive) {
     uint8_t* buf = nullptr;
     size_t len = 0;
     if (fetchResizedPhoto(e.altUrl, &buf, &len)) {
-      Lock l;
-      publishPhoto(ac.hex, buf, len, "airport-data.com", false);
-      shown = true;
+      if (uint16_t* px = decodePhoto(buf, len)) {
+        Lock l;
+        publishPhoto(ac.hex, (uint8_t*)px, PHOTO_PX_BYTES, "airport-data.com", false);
+        shown = true;
+      }
     }
   }
 

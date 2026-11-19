@@ -108,10 +108,20 @@ being shown, and API answers cached for at most 24 h.
 
 On a **tap**, the net task asks planespotters `/pub/photos/hex/{HEX}?reg=…&icaoType=…` (the
 same request as the tar1090/adsb.fi map, which returns a same-type photo when there's no exact
-match) and downloads `photos[0].thumbnail.src` straight from their CDN. The on-chip decoder only
-draws **baseline** JPEGs, so every file goes through `jpegKind()` first. If planespotters has
-nothing, or its file is progressive, or it can't be reached, the airport-data.com thumbnail that
-adsbdb lists is used instead, resized by `wsrv.nl/?url=…&w=88&h=59&fit=cover&output=jpg`.
+match) and downloads `photos[0].thumbnail.src` straight from their CDN. Those thumbnails are
+**progressive** JPEGs, which LovyanGFX's decoder (TJpgDec) can't read, so the net task decodes
+every photo itself with **`jpeg_small`** (`src/jpeg_small.*`): baseline and progressive, decoded
+straight into the 88×59 box (cropped to fill), RGB565, handed to the UI as pixels. If
+planespotters has nothing or can't be reached, the airport-data.com thumbnail that adsbdb lists
+is used instead, resized by `wsrv.nl/?url=…&w=88&h=59&fit=cover&output=jpg`.
+
+`jpeg_small` keeps memory low by decoding at 1/2, 1/4 or 1/8 size (the largest reduction that
+still covers the box): it stores only each block's top-left N×N coefficients plus a 64-bit
+"non-zero" mask per block (progressive refinement scans need it to stay in step with the
+bitstream), runs an N×N integer inverse DCT, and box-filters one row at a time into the output.
+A 200×136 thumbnail needs about 30 KB (4:2:0) to 53 KB (4:4:4). The work budget is free heap
+minus 45 KB, capped at 110 KB. Tests: `tools/jpeg_test/` (baseline vs progressive must decode
+identically; 8,000 damaged files under ASan/UBSan).
 adsbdb `/v0/aircraft/{hex}?callsign=…` supplies type, owner and route.
 
 If planespotters answers 403 or 429, it isn't asked again for 10 minutes. Downloads retry once
@@ -171,7 +181,7 @@ Connect at 115200 baud (`pio device monitor`). Useful lines:
 
 | Message | Meaning |
 |---|---|
-| `Desk Flight Radar v1.0.11`, `heap free: …` | Boot |
+| `Desk Flight Radar v1.0.12`, `heap free: …` | Boot |
 | `board: I/O expander not responding` | CH32V003 didn't answer (check I2C) |
 | `wifi: connecting / connected, IP … / lost connection` | Wi-Fi state |
 | `wifi: attempt failed (wrong password, reason 15)` | Why a connection failed |
@@ -179,10 +189,9 @@ Connect at 115200 baud (`pio device monitor`). Useful lines:
 | `weather: ok (HTTP 200) in 1450 ms` | Weather fetch |
 | `photo: planespotters -> https://t.plnspttrs.net/…` | Photo lookup (`(none on file)`; `(same type, different aircraft)` for a stand-in) |
 | `photo: planespotters refused the request (HTTP 403)` | Planespotters blocked the request; paused for 10 min |
-| `photo: planespotters image HTTP 200, 9120 bytes, 600 ms` | Planespotters image, downloaded as is |
-| `… (progressive JPEG, can't draw)` | File the decoder can't draw; the backup photo is tried |
+| `photo: planespotters image HTTP 200, 13702 bytes, 980 ms (progressive)` | Planespotters image, downloaded as is |
+| `photo: decode ok in 60 ms (heap 140000, budget 95000)` | Decoded into the photo box (`failed: …` gives the reason) |
 | `photo: resized HTTP 200, 2843 bytes, 900 ms` | Backup (airport-data.com) photo via wsrv.nl (`direct` = original file) |
-| `photo: decode failed (n bytes)` | Drawing failed on screen |
 | `details A1B2C3: tap, photo, text ok, 2100 ms` | Result: `photo`, `no photo on file`, `photo failed` (`prefetch` = text only) |
 | `portal: started FlightRadar-XXXX / stopped` | Setup hotspot |
 | `audio: ES8311 not responding` | Codec didn't answer |

@@ -712,12 +712,11 @@ class RadarScreen : public Screen {
             photoSerial_ = g_details.photoSerial;
             photoHeld_ = true;
             photo_.fillScreen(ui_c::PHOTO_BG);
-            photoOk_ = photo_.drawJpg(g_details.photo, g_details.photoLen, 0, 0, cfg::PHOTO_W, cfg::PHOTO_H, 0, 0, 0.0f,
-                                      0.0f, lgfx::datum_t::middle_center);
-            if (!photoOk_) {
+            photoOk_ = g_details.photoLen == (size_t)cfg::PHOTO_W * cfg::PHOTO_H * 2;
+            if (photoOk_)
+              photo_.pushImage(0, 0, cfg::PHOTO_W, cfg::PHOTO_H, (const lgfx::rgb565_t*)g_details.photo);
+            else
               photoNone = true;
-              Serial.printf("photo: decode failed (%u bytes)\n", (unsigned)g_details.photoLen);
-            }
           }
         }
       }

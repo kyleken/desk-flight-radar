@@ -6,6 +6,7 @@
 #include "display.h"
 #include "settings.h"
 #include "state.h"
+#include "jpeg_small.h"
 #include "ui.h"
 
 extern uint32_t g_simMillis;
@@ -130,9 +131,15 @@ int main() {
   strcpy(g_details.airline, "United Airlines");
   strcpy(g_details.route, "DEN \xE2\x86\x92 ORD");
   strcpy(g_details.photographer, "J. Spotter");
-  g_details.photo = jpg.data();
-  g_details.photoLen = jpg.size();
-  g_details.photoReady = !jpg.empty();
+  // the firmware decodes photos in the network task; do the same here
+  static std::vector<uint16_t> px(cfg::PHOTO_W * cfg::PHOTO_H);
+  const char* why = nullptr;
+  bool decoded = !jpg.empty() &&
+                 jpeg_small::decodeCover(jpg.data(), jpg.size(), px.data(), cfg::PHOTO_W, cfg::PHOTO_H, 200000, &why);
+  if (!decoded) printf("sample photo: %s\n", why ? why : "missing");
+  g_details.photo = (uint8_t*)px.data();
+  g_details.photoLen = px.size() * 2;
+  g_details.photoReady = decoded;
   g_details.photoSerial = 1;
   g_details.photoSimilar = true;
   g_simMillis += 1600;

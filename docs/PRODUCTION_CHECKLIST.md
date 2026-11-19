@@ -4,7 +4,7 @@ Run through this for every board before it goes in a gift box. About 5 minutes p
 
 ## What goes in each box
 
-- [ ] Waveshare ESP32-C6-Touch-LCD-2.8, flashed with v1.0.11
+- [ ] Waveshare ESP32-C6-Touch-LCD-2.8, flashed with v1.0.12
 - [ ] USB-C cable (a **data** cable also lets them update it later)
 - [ ] USB power adapter (optional; any phone charger works)
 - [ ] Printed quick-start card (`docs/QuickStart-Card.pdf`)
@@ -15,7 +15,7 @@ Run through this for every board before it goes in a gift box. About 5 minutes p
 
 ## Flash
 
-- [ ] Flash `release/FlightRadar-v1.0.11.bin` at `0x0` with **Erase all** ticked
+- [ ] Flash `release/FlightRadar-v1.0.12.bin` at `0x0` with **Erase all** ticked
       (see [FLASHING.md](FLASHING.md))
 - [ ] Press RESET
 
